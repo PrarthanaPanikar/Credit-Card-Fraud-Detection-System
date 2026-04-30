@@ -1,234 +1,301 @@
 """
-Credit Card Fraud Detection System - Main Entry Point
-====================================================
-
-This is the main entry point for running the complete fraud detection pipeline.
-
-Usage:
-    python main.py --help                    # Show help
-    python main.py generate-data             # Generate synthetic dataset
-    python main.py eda                       # Run exploratory data analysis
-    python main.py train                     # Train all ML models
-    python main.py predict                   # Run prediction demo
-    python main.py api                       # Start FastAPI server
-    python main.py all                       # Run complete pipeline
-
-Examples:
-    # Complete workflow
-    python main.py all
-
-    # Individual steps
-    python main.py generate-data --samples 50000
-    python main.py train --smote
-    python main.py api --port 8000
+FastAPI Application for Credit Card Fraud Detection
+Provides REST API endpoints for real-time fraud scoring.
 """
 
-import argparse
-import sys
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+import uvicorn
 import os
+import sys
+from datetime import datetime
+import json
 
-# Ensure src is in path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from src.predictor import FraudPredictor
 
-def banner():
-    """Display welcome banner."""
-    print("""
-╔══════════════════════════════════════════════════════════════════╗
-║           CREDIT CARD FRAUD DETECTION SYSTEM                      ║
-║                                                                  ║
-║  A comprehensive ML system for real-time fraud detection          ║
-╚══════════════════════════════════════════════════════════════════╝
-    """)
+# Initialize FastAPI app
+app = FastAPI(
+    title="Credit Card Fraud Detection API",
+    description="Real-time fraud detection API for credit card transactions",
+    version="1.0.0"
+)
 
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def generate_data(args):
-    """Generate synthetic transaction data."""
-    from src.generate_synthetic_data import generate_dataset, save_dataset
-    
-    print("\n[STEP 1] Generating Synthetic Dataset")
-    print("-" * 50)
-    
-    df = generate_dataset(n_samples=args.samples, fraud_ratio=args.fraud_ratio)
-    save_dataset(df, output_dir=args.output_dir)
-    
-    print("\nDataset generation complete!")
-    print(f"Location: {args.output_dir}/")
-    return df
+# Initialize predictor (lazy loading)
+predictor = None
 
-
-def run_eda(args):
-    """Run exploratory data analysis."""
-    from src.eda import generate_full_eda
-    
-    print("\n[STEP 2] Exploratory Data Analysis")
-    print("-" * 50)
-    
-    data_path = args.data_path or 'data/transactions.parquet'
-    stats = generate_full_eda(data_path, output_dir=args.output_dir)
-    
-    print("\nEDA complete!")
-    print(f"Plots saved to: {args.output_dir}/")
-    return stats
+def get_predictor():
+    """Get or initialize fraud predictor."""
+    global predictor
+    if predictor is None:
+        model_path = os.environ.get('MODEL_PATH', 'models/fraud_detection_model.joblib')
+        predictor = FraudPredictor(model_path)
+    return predictor
 
 
-def train_models(args):
-    """Train ML models."""
-    from src.model_trainer import train_fraud_detection_model
-    
-    print("\n[STEP 3] Training ML Models")
-    print("-" * 50)
-    
-    data_path = args.data_path or 'data/transactions.parquet'
-    trainer = train_fraud_detection_model(
-        data_path=data_path,
-        model_dir=args.model_dir,
-        output_dir=args.output_dir,
-        use_smote=args.smote
-    )
-    
-    print("\nTraining complete!")
-    print(f"Model saved to: {args.model_dir}/")
-    return trainer
+# Pydantic models
+class Transaction(BaseModel):
+    """Transaction data model."""
+    tx_id: str = Field(..., description="Unique transaction ID")
+    ts: Optional[str] = Field(None, description="Transaction timestamp")
+    amount: float = Field(..., gt=0, description="Transaction amount")
+    merchant_cat: str = Field(..., description="Merchant category")
+    merchant_id_hash: str = Field(..., description="Hashed merchant ID")
+    card_id_hash: str = Field(..., description="Hashed card ID")
+    city: str = Field(..., description="City")
+    country: str = Field(..., description="Country code")
+    device_type: str = Field(..., description="Device type (mobile/desktop/tablet/pos)")
+    channel: str = Field(..., description="Channel (online/in_store/app/phone)")
+    hour: int = Field(..., ge=0, le=23, description="Hour of day (0-23)")
+    dayofweek: int = Field(..., ge=0, le=6, description="Day of week (0=Monday)")
+    is_international: bool = Field(default=False, description="International transaction flag")
+    is_night: bool = Field(default=False, description="Night time transaction flag")
+    prev_24h_tx_count_card: Optional[float] = Field(default=0.0, description="Card transaction count in last 24h")
+    prev_24h_amt_card: Optional[float] = Field(default=0.0, description="Card transaction amount in last 24h")
+    prev_1h_tx_count_card: Optional[float] = Field(default=0.0, description="Card transaction count in last 1h")
+    velocity_amt_1h: Optional[float] = Field(default=0.0, description="Velocity amount in last 1h")
 
 
-def run_prediction(args):
-    """Run prediction demo."""
-    from src.predictor import demonstrate_prediction
-    
-    print("\n[STEP 4] Running Prediction Demo")
-    print("-" * 50)
-    
-    try:
-        demonstrate_prediction()
-        print("\nPrediction demo complete!")
-    except FileNotFoundError:
-        print("\nError: Model not found. Please train the model first:")
-        print("  python main.py train")
+class PredictionResult(BaseModel):
+    """Prediction result model."""
+    transaction_id: str
+    fraud_probability: float
+    risk_score: int
+    decision: str
+    threshold: float
+    model_version: str
+    timestamp: str
 
 
-def start_api(args):
-    """Start FastAPI server."""
-    import uvicorn
-    
-    print("\n[STEP 5] Starting API Server")
-    print("-" * 50)
-    
-    print(f"Starting server on http://localhost:{args.port}")
-    print(f"API Documentation: http://localhost:{args.port}/docs")
-    print("\nPress Ctrl+C to stop the server\n")
-    
-    uvicorn.run(
-        "api.main:app",
-        host="0.0.0.0",
-        port=args.port,
-        reload=args.reload
-    )
+class BatchPredictionRequest(BaseModel):
+    """Batch prediction request model."""
+    transactions: List[Transaction]
 
 
-def run_all(args):
-    """Run complete pipeline."""
-    banner()
-    
-    # Step 1: Generate data
-    generate_data(args)
-    
-    # Step 2: EDA
-    run_eda(args)
-    
-    # Step 3: Train models
-    train_models(args)
-    
-    # Step 4: Prediction demo
-    run_prediction(args)
-    
-    print("\n" + "=" * 60)
-    print("COMPLETE PIPELINE FINISHED SUCCESSFULLY!")
-    print("=" * 60)
-    print("\nNext steps:")
-    print("  1. View EDA plots in: outputs/")
-    print("  2. Check model metrics in outputs/")
-    print("  3. Start API server: python main.py api")
-    print("  4. Launch dashboard: cd dashboard && npm run dev")
+class BatchPredictionResponse(BaseModel):
+    """Batch prediction response model."""
+    results: List[PredictionResult]
+    total: int
+    flagged: int
 
 
-def main():
-    """Main entry point with argument parsing."""
-    parser = argparse.ArgumentParser(
-        description="Credit Card Fraud Detection System",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py generate-data --samples 100000
-  python main.py train --smote
-  python main.py api --port 8000
-  python main.py all
-        """
-    )
-    
-    subparsers = parser.add_subparsers(dest='command', help='Command to run')
-    
-    # Generate data command
-    gen_parser = subparsers.add_parser('generate-data', help='Generate synthetic dataset')
-    gen_parser.add_argument('--samples', type=int, default=100000, help='Number of transactions')
-    gen_parser.add_argument('--fraud-ratio', type=float, default=0.015, help='Fraud ratio')
-    gen_parser.add_argument('--output-dir', default='data', help='Output directory')
-    
-    # EDA command
-    eda_parser = subparsers.add_parser('eda', help='Run exploratory data analysis')
-    eda_parser.add_argument('--data-path', default='data/transactions.parquet', help='Data file path')
-    eda_parser.add_argument('--output-dir', default='outputs', help='Output directory')
-    
-    # Train command
-    train_parser = subparsers.add_parser('train', help='Train ML models')
-    train_parser.add_argument('--data-path', default='data/transactions.parquet', help='Data file path')
-    train_parser.add_argument('--model-dir', default='models', help='Model directory')
-    train_parser.add_argument('--output-dir', default='outputs', help='Output directory')
-    train_parser.add_argument('--smote', action='store_true', help='Use SMOTE for balancing')
-    
-    # Predict command
-    predict_parser = subparsers.add_parser('predict', help='Run prediction demo')
-    
-    # API command
-    api_parser = subparsers.add_parser('api', help='Start API server')
-    api_parser.add_argument('--port', type=int, default=8000, help='Server port')
-    api_parser.add_argument('--reload', action='store_true', help='Enable auto-reload')
-    
-    # All command (complete pipeline)
-    all_parser = subparsers.add_parser('all', help='Run complete pipeline')
-    all_parser.add_argument('--samples', type=int, default=50000, help='Number of transactions')
-    all_parser.add_argument('--fraud-ratio', type=float, default=0.015, help='Fraud ratio')
-    all_parser.add_argument('--smote', action='store_true', default=True, help='Use SMOTE')
-    all_parser.add_argument('--data-dir', default='data', help='Data directory')
-    all_parser.add_argument('--model-dir', default='models', help='Model directory')
-    all_parser.add_argument('--output-dir', default='outputs', help='Output directory')
-    
-    args = parser.parse_args()
-    
-    if args.command is None:
-        parser.print_help()
-        return
-    
-    # Run appropriate command
-    commands = {
-        'generate-data': generate_data,
-        'eda': run_eda,
-        'train': train_models,
-        'predict': run_prediction,
-        'api': start_api,
-        'all': run_all
+class Alert(BaseModel):
+    """Fraud alert model."""
+    alert_id: str
+    transaction_id: str
+    risk_score: int
+    decision: str
+    timestamp: str
+    amount: float
+    reason: List[str]
+
+
+# Store alerts (in production, use a database)
+alerts_store: List[Alert] = []
+
+
+@app.get("/")
+async def root():
+    """Root endpoint - API information."""
+    return {
+        "message": "Credit Card Fraud Detection API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
     }
-    
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
     try:
-        commands[args.command](args)
-    except KeyboardInterrupt:
-        print("\n\nOperation cancelled by user.")
+        pred = get_predictor()
+        return {
+            "status": "healthy",
+            "model": pred.model_name,
+            "version": pred.version,
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
-        print(f"\nError: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
-if __name__ == '__main__':
-    main()
+@app.get("/model/info")
+async def model_info():
+    """Get model information."""
+    try:
+        pred = get_predictor()
+        info = pred.get_model_info()
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/score", response_model=PredictionResult)
+async def score_transaction(transaction: Transaction):
+    """
+    Score a single transaction for fraud risk.
+    
+    Returns fraud probability, risk score, and recommended action.
+    """
+    try:
+        pred = get_predictor()
+        
+        # Convert to dict
+        tx_dict = transaction.dict()
+        
+        # Get prediction
+        result = pred.predict_single(tx_dict)
+        
+        # Create alert if high risk
+        if result['risk_score'] >= 70:
+            alert = Alert(
+                alert_id=f"ALT{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                transaction_id=result['transaction_id'],
+                risk_score=result['risk_score'],
+                decision=result['decision'],
+                timestamp=datetime.now().isoformat(),
+                amount=transaction.amount,
+                reason=generate_alert_reasons(transaction, result['risk_score'])
+            )
+            alerts_store.append(alert)
+        
+        return PredictionResult(
+            transaction_id=result['transaction_id'],
+            fraud_probability=result['fraud_probability'],
+            risk_score=result['risk_score'],
+            decision=result['decision'],
+            threshold=result['threshold'],
+            model_version=result['model_version'],
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/score/batch", response_model=BatchPredictionResponse)
+async def score_batch(request: BatchPredictionRequest):
+    """
+    Score multiple transactions in batch.
+    
+    Efficient for processing multiple transactions at once.
+    """
+    try:
+        pred = get_predictor()
+        
+        # Convert transactions to dicts
+        tx_dicts = [t.dict() for t in request.transactions]
+        
+        # Batch prediction
+        results = pred.predict_batch(tx_dicts)
+        
+        # Convert to response model
+        prediction_results = []
+        flagged = 0
+        
+        for tx, result in zip(request.transactions, results):
+            if result['risk_score'] >= 70:
+                flagged += 1
+            
+            prediction_results.append(PredictionResult(
+                transaction_id=result['transaction_id'],
+                fraud_probability=result['fraud_probability'],
+                risk_score=result['risk_score'],
+                decision=result['decision'],
+                threshold=result['threshold'],
+                model_version=result['model_version'],
+                timestamp=datetime.now().isoformat()
+            ))
+        
+        return BatchPredictionResponse(
+            results=prediction_results,
+            total=len(prediction_results),
+            flagged=flagged
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/alerts")
+async def get_alerts(limit: int = 50):
+    """Get recent fraud alerts."""
+    return {
+        "alerts": alerts_store[-limit:][::-1],
+        "total": len(alerts_store)
+    }
+
+
+@app.post("/stream")
+async def stream_transaction(transaction: Transaction):
+    """
+    Stream endpoint for real-time processing.
+    
+    Similar to /score but designed for webhook/Kafka integration.
+    """
+    try:
+        pred = get_predictor()
+        result = pred.predict_single(transaction.dict())
+        
+        return {
+            "transaction_id": result['transaction_id'],
+            "probability": result['fraud_probability'],
+            "decision": result['decision'],
+            "processed_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def generate_alert_reasons(transaction: Transaction, risk_score: int) -> List[str]:
+    """Generate human-readable reasons for high-risk alerts."""
+    reasons = []
+    
+    if risk_score >= 90:
+        reasons.append("Very high fraud probability")
+    elif risk_score >= 80:
+        reasons.append("High fraud probability")
+    else:
+        reasons.append("Elevated risk detected")
+    
+    if transaction.amount > 25000:
+        reasons.append(f"Large transaction amount: ₹{transaction.amount:,.0f}")
+    
+    if transaction.is_international:
+        reasons.append("International transaction")
+    
+    if transaction.is_night:
+        reasons.append("Unusual nighttime transaction")
+    
+    if transaction.velocity_amt_1h and transaction.velocity_amt_1h > 50000:
+        reasons.append("High velocity in recent transactions")
+    
+    if transaction.prev_1h_tx_count_card and transaction.prev_1h_tx_count_card > 5:
+        reasons.append("Unusual transaction frequency")
+    
+    return reasons
+
+
+if __name__ == "__main__":
+    # Run the API server
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
