@@ -294,22 +294,10 @@ python main.py all --samples 50000 --smote
 ---
 
 ## Screenshots
+<img width="1095" height="571" alt="image" src="https://github.com/user-attachments/assets/060b6631-5a0e-43d9-bfa1-a6ead316713f" />
 
-### Model Comparison
+<img width="1357" height="590" alt="image" src="https://github.com/user-attachments/assets/d78e8a91-fcd7-4c1a-b8cd-e909d75a8c8e" />
 
-![Model Comparison](outputs/model_comparison.png)
-
-### Confusion Matrix
-
-![Confusion Matrix](outputs/confusion_matrix.png)
-
-### Precision-Recall Curves
-
-![PR Curves](outputs/precision_recall_curves.png)
-
-### Dashboard
-
-![Dashboard](images/dashboard_preview.png)
 
 ---
 
